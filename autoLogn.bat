@@ -1,0 +1,1 @@
+cmd /k python C:\Users\Hu\AppData\MyData\SchoolNet\login.py
