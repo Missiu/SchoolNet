@@ -1,5 +1,3 @@
-import platform
-import subprocess
 import requests
 import time
 import random
@@ -19,56 +17,47 @@ def get_current_time():
 
 
 def is_internet_connected():
-    """使用 ping 命令检测网络连接"""
-    system = platform.system()
-    if system == "Windows":
-        cmd = ["ping", "-n", "1", "www.baidu.com"]
-    else:
-        cmd = ["ping", "-c", "1", "www.baidu.com"]
-
+    """使用 HTTP 请求检测网络连接"""
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return result.returncode == 0  # 返回码为 0 表示网络连接正常
-    except Exception as e:
-        print("Ping 检测失败:", str(e))
+        # 请求百度以判断网络连接状态
+        response = requests.get("https://www.baidu.com", timeout=3, proxies={"http": None, "https": None})
+        print(get_current_time(), "网络连接成功")
+        time.sleep(5)  # 等待5秒后重试
+        return response.status_code == 200
+    except requests.RequestException:
+        print(get_current_time(), "网络连接失败")
         return False
 
 
-def parse_response(response):
-    """解析并返回响应内容中的 result 状态"""
-    response.encoding = 'utf-8'
-    content = response.text.encode().decode("unicode_escape").encode('raw_unicode_escape').decode()
-    status_index = content.find('"result":"')
-    if status_index == -1:
-        return None  # 如果未找到 result 字段，返回 None
-    return content[status_index + 10:status_index + 17]
-
-
-def check_and_login(session):
-    """
-    检查当前在线状态，并根据状态执行相应的操作。
-    如果当前处于离线状态，尝试登录。
-    """
+def check_login_status():
+    """检查是否登录状态"""
     try:
-        # 检查在线状态
-        response = session.post(url=checkStatusUrl, headers=header, data=dataCheck)
-        status = parse_response(response)
+        response = requests.post(url=checkStatusUrl, headers=header, data=dataCheck, timeout=5)
+        response.encoding = 'utf-8'
+        content = response.text.encode().decode("unicode_escape").encode('raw_unicode_escape').decode()
+        status_index = content.find('"result":"')
 
-        if status in ['wait', 'success']:
-            print(get_current_time(), "当前处于在线状态。")
-            return True  # 在线状态
+        # 根据状态判断是否在线
+        return content[status_index + 10:status_index + 14] in ['wait', 'success']
+    except requests.RequestException as e:
+        print(get_current_time(), "网络请求失败:", str(e))
+        return False
+
+
+def login():
+    """执行登录操作"""
+    try:
+        login_response = requests.post(url=loginUrl, headers=header, data=dataLogin, timeout=5)
+        login_response.encoding = 'utf-8'
+        login_content = login_response.text.encode().decode("unicode_escape").encode('raw_unicode_escape').decode()
+        result_index = login_content.find('"result":"')
+
+        if login_content[result_index + 10:result_index + 17] == 'success':
+            print(get_current_time(), "登录成功！")
+            return True  # 登录成功
         else:
-            print(get_current_time(), "当前已经下线，正在尝试登录！")
-            # 尝试登录
-            login_response = session.post(url=loginUrl, headers=header, data=dataLogin)
-            login_status = parse_response(login_response)
-
-            if login_status == 'success':
-                print(get_current_time(), "登录成功！")
-                return True  # 登录成功
-            else:
-                print(get_current_time(), "登录失败！")
-                return False  # 登录失败
+            print(get_current_time(), "登录失败！")
+            return False  # 登录失败
     except requests.RequestException as e:
         print(get_current_time(), "网络请求失败:", str(e))
         return False
@@ -77,52 +66,23 @@ def check_and_login(session):
         return False
 
 
-def monitor_online_status(session):
-    """
-    持续监测在线状态，如果掉线则尝试重新登录。
-    """
+def main():
+    """主逻辑，持续判断网络状态并处理登录逻辑"""
     while True:
         # 检查网络连接状态
         if not is_internet_connected():
             print(get_current_time(), "当前无网络连接，请检查网络。")
-            time.sleep(5)
-            continue
+            retry_count = 0
+            while retry_count < 10:
+                if login():
+                    break  # 登录成功，退出重试循环
+                retry_count += 1
+                print(get_current_time(), f"登录失败，重试第 {retry_count} 次...")
+                time.sleep(5)  # 等待5秒后重试
 
-        # 检查在线状态
-        response = session.post(url=checkStatusUrl, headers=header, data=dataCheck)
-        status = parse_response(response)
-
-        if status in ['wait', 'success']:
-            print(get_current_time(), "仍处于在线状态。")
-        else:
-            print(get_current_time(), "检测到下线，正在重新登录...")
-            if not check_and_login(session):
-                print(get_current_time(), "重新登录失败，稍后重试。")
-
-        # 隔一段时间再次检查状态
-        time.sleep(5)
-
-
-def main():
-    with requests.Session() as session:
-        while True:
-            # 检查网络状态
-            if not is_internet_connected():
-                print(get_current_time(), "当前无网络连接，请检查网络。")
-                # 登录尝试
-                for attempt in range(1, 11):  # 重试10次
-                    if check_and_login(session):
-                        # 登录成功后，开始监测在线状态
-                        monitor_online_status(session)
-                        break  # 跳出重试循环
-                    else:
-                        print(get_current_time(), f"登录失败，重试第 {attempt} 次...")
-                        time.sleep(5)  # 等待5秒后重试
-                else:
-                    # 连续10次登录失败
-                    print(get_current_time(), "连续10次尝试登录失败，休眠1小时后重试。")
-                    time.sleep(3600)  # 休眠1小时
-
+            if retry_count >= 10:
+                print(get_current_time(), "连续10次尝试登录失败，休眠1小时后重试。")
+                time.sleep(3600)  # 休眠1小时
 
 if __name__ == "__main__":
     main()
